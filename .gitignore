@@ -1,0 +1,23 @@
+# Environment Secrets (DO NOT COMMIT SENSITIVE KEYS)
+.env
+
+# Python virtual environment
+venv/
+env/
+ENV/
+
+# Python Cache & Compilation Artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# User Data Logs (Optional to ignore if you want to keep your logs purely local)
+data/backup_log_*.csv
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
