@@ -67,11 +67,18 @@ python parlay_calc.py
 * **What it does:** Asks you how many legs are in the parlay, lets you input the AI probabilities and bookmaker decimal odds for each leg, and outputs the overall combined success probability and expected return.
 
 ### 🔄 4. Update and Sync Results (`update_results.py`)
-Run this script the morning **after** matches are played to calculate your bankroll performance.
+Run this script the morning **after** matches are played to calculate your bankroll performance and P&L.
 ```bash
 python update_results.py
 ```
-* **What it does:** Automatically fetches the actual match result, matches it against your logged predictions in `data/prediction_log.csv`, and converts `PENDING` states to outcomes.
+* **What it does:** Automatically fetches actual match results, reconciles them against your logged predictions in `data/prediction_log.csv`, grades H2H, Totals, and BTTS bets (`WON` or `LOST`), and outputs a complete bankroll audit (Total Staked, Net P&L, and ROI %).
+
+### 📈 5. Run the Multi-Season Walk-Forward Backtest (`walkforward_backtest.py`)
+Want to verify the mathematical reliability of the model across past Premier League seasons?
+```bash
+python walkforward_backtest.py
+```
+* **What it does:** Performs an expanding-window chronological walk-forward test across 4 historical seasons. Computes out-of-sample Brier scores, compares against Bet365 closing lines, and simulates Tenth-Kelly bankroll trajectory.
 
 ---
 
