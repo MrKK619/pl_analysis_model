@@ -3,51 +3,79 @@ import numpy as np
 import os
 from utils import fetch_historical_data, normalize_team, LOG_FILE
 
-def evaluate_bet_outcome(selection, market, fthg, ftag, ftr):
-    """Evaluates whether a specific betting market selection won or lost."""
-    if market == 'H2H':
-        if 'Draw' in selection:
+def evaluate_bet_outcome(selection, market, fthg, ftag, ftr, home_team=None, away_team=None):
+    """Evaluates whether a specific betting market selection won, lost, or pushed."""
+    market = str(market).upper()
+    sel = str(selection).strip()
+    
+    is_away = False
+    if 'Away' in sel or (away_team and normalize_team(away_team) in sel):
+        is_away = True
+    elif 'Home' in sel or (home_team and normalize_team(home_team) in sel):
+        is_away = False
+    elif 'Win' in sel and not ('Away' in sel):
+        is_away = False
+
+    if market in ('H2H', '1X2'):
+        if 'Draw' in sel:
             return 'WON' if ftr == 'D' else 'LOST'
-        elif 'Win' in selection:
-            if ftr == 'H':
-                return 'WON' if not ('Away' in selection) else 'LOST'
-            elif ftr == 'A':
-                return 'WON' if ('Away' in selection) else 'LOST'
-            else:
-                return 'LOST'
-        return 'LOST'
-        
-    elif market == 'Totals':
+        elif is_away:
+            return 'WON' if ftr == 'A' else 'LOST'
+        else:
+            return 'WON' if ftr == 'H' else 'LOST'
+            
+    elif market == 'TOTALS':
         total_goals = fthg + ftag
-        if 'Over' in selection:
+        if 'Over' in sel:
             return 'WON' if total_goals > 2.5 else 'LOST'
-        elif 'Under' in selection:
+        elif 'Under' in sel:
             return 'WON' if total_goals < 2.5 else 'LOST'
             
     elif market == 'BTTS':
         btts_actual = (fthg > 0 and ftag > 0)
-        if 'Yes' in selection:
+        if 'Yes' in sel:
             return 'WON' if btts_actual else 'LOST'
-        elif 'No' in selection:
+        elif 'No' in sel:
             return 'WON' if not btts_actual else 'LOST'
+            
+    elif market == 'DNB':
+        if ftr == 'D':
+            return 'PUSH'
+        elif is_away:
+            return 'WON' if ftr == 'A' else 'LOST'
+        else:
+            return 'WON' if ftr == 'H' else 'LOST'
             
     return 'PENDING'
 
-def get_closing_odds_from_match(match_row, market, selection):
-    """Extracts the bookmaker closing odds for the specific market selection."""
+def get_closing_odds_from_match(match_row, market, selection, home_team=None, away_team=None):
+    """Extracts the sharp Pinnacle closing odds (with market fallbacks) for CLV auditing."""
+    market = str(market).upper()
+    sel = str(selection).strip()
+    is_away = 'Away' in sel or (away_team and normalize_team(away_team) in sel)
     try:
-        if market == 'H2H':
-            if 'Draw' in selection:
-                return float(match_row.get('B365D', 0.0))
-            elif 'Away' in selection:
-                return float(match_row.get('B365A', 0.0))
+        if market in ('H2H', '1X2'):
+            if 'Draw' in sel:
+                val = float(match_row.get('PSCD', match_row.get('MaxCD', match_row.get('B365D', 0.0))))
+                return val if val > 1.0 else float(match_row.get('B365D', 0.0))
+            elif is_away:
+                val = float(match_row.get('PSCA', match_row.get('MaxCA', match_row.get('B365A', 0.0))))
+                return val if val > 1.0 else float(match_row.get('B365A', 0.0))
             else:
-                return float(match_row.get('B365H', 0.0))
-        elif market == 'Totals':
-            if 'Over' in selection:
-                return float(match_row.get('B365>2.5', match_row.get('BbAv>2.5', 0.0)))
-            elif 'Under' in selection:
-                return float(match_row.get('B365<2.5', match_row.get('BbAv<2.5', 0.0)))
+                val = float(match_row.get('PSCH', match_row.get('MaxCH', match_row.get('B365H', 0.0))))
+                return val if val > 1.0 else float(match_row.get('B365H', 0.0))
+        elif market == 'TOTALS':
+            if 'Over' in sel:
+                return float(match_row.get('MaxC>2.5', match_row.get('B365>2.5', match_row.get('BbAv>2.5', 0.0))))
+            elif 'Under' in sel:
+                return float(match_row.get('MaxC<2.5', match_row.get('B365<2.5', match_row.get('BbAv<2.5', 0.0))))
+        elif market == 'DNB':
+            psch = float(match_row.get('PSCH', match_row.get('MaxCH', match_row.get('B365H', 0.0))))
+            pscd = float(match_row.get('PSCD', match_row.get('MaxCD', match_row.get('B365D', 0.0))))
+            psca = float(match_row.get('PSCA', match_row.get('MaxCA', match_row.get('B365A', 0.0))))
+            from utils import compute_dnb_odds
+            close_dnb = compute_dnb_odds(psch, pscd, psca)
+            return close_dnb[1] if is_away else close_dnb[0]
     except Exception:
         pass
     return 0.0
@@ -98,16 +126,19 @@ def update():
                 odds = float(row.get('Market_Odds', 1.0))
                 stake = float(row.get('Stake', 0.0))
                 
-                outcome = evaluate_bet_outcome(selection, market, fthg, ftag, ftr)
+                outcome = evaluate_bet_outcome(selection, market, fthg, ftag, ftr, home_team=h, away_team=a)
                 
-                if outcome in ('WON', 'LOST'):
+                if outcome in ('WON', 'LOST', 'PUSH'):
                     resolved_count += 1
                     logs.at[idx, 'Outcome'] = outcome
-                    pnl = round(stake * (odds - 1.0), 2) if outcome == 'WON' else round(-stake, 2)
+                    if outcome == 'PUSH':
+                        pnl = 0.0
+                    else:
+                        pnl = round(stake * (odds - 1.0), 2) if outcome == 'WON' else round(-stake, 2)
                     logs.at[idx, 'PnL'] = pnl
                     
                     # Extract Closing Odds and CLV
-                    closing_odd = get_closing_odds_from_match(match_row, market, selection)
+                    closing_odd = get_closing_odds_from_match(match_row, market, selection, home_team=h, away_team=a)
                     if closing_odd > 1.0:
                         clv_val = round(((odds / closing_odd) - 1.0) * 100.0, 2)
                         logs.at[idx, 'Closing_Odds'] = closing_odd
@@ -122,12 +153,13 @@ def update():
     print(f"Results Sync Complete: {resolved_count} bets resolved (Pending remaining: {pending_count - resolved_count})")
     
     # Audit Performance & CLV Metrics
-    resolved_bets = logs[logs['Outcome'].isin(['WON', 'LOST'])]
+    resolved_bets = logs[logs['Outcome'].isin(['WON', 'LOST', 'PUSH'])]
+    decisive_bets = logs[logs['Outcome'].isin(['WON', 'LOST'])]
     if len(resolved_bets) > 0:
         total_staked = resolved_bets['Stake'].sum()
         total_pnl = resolved_bets['PnL'].sum()
         roi = (total_pnl / total_staked) if total_staked > 0 else 0.0
-        win_rate = np.mean(resolved_bets['Outcome'] == 'WON')
+        win_rate = np.mean(decisive_bets['Outcome'] == 'WON') if len(decisive_bets) > 0 else 0.0
         
         # Calculate Average CLV
         valid_clvs = []

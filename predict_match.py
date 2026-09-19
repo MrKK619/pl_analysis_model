@@ -5,7 +5,10 @@ import numpy as np
 from utils import (
     fetch_historical_data, add_pre_match_features, get_live_match_features,
     get_market_probabilities, calculate_kelly, log_prediction,
-    devig_odds_power, normalize_team, MODEL_CACHE
+    devig_odds_power, normalize_team, MODEL_CACHE,
+    compute_dnb_probs, compute_dnb_odds, get_adaptive_market_weight,
+    MARKET_PRIOR_WEIGHT, MAX_DIVERGENCE, MIN_ODDS, MAX_ODDS, MIN_EDGE,
+    MAX_DRAW_RISK, KELLY_FRACTION, MAX_STAKE_PCT
 )
 
 def load_or_train_models():
@@ -85,72 +88,108 @@ def individual_prediction():
     
     probs = get_market_probabilities(lambda_h, lambda_a)
     clf_probs = calibrated_clf.predict_proba(input_clf)[0]
-    probs['H'] = float(clf_probs[0])
-    probs['D'] = float(clf_probs[1])
-    probs['A'] = float(clf_probs[2])
     
     # Compute true de-vigged fair market probabilities
     fair_1x2 = devig_odds_power([h_odds, d_odds, a_odds])
     
+    # Adaptive Empirical Bayes Posterior Probability
+    adaptive_weight = get_adaptive_market_weight(
+        match_date=None,
+        home_team=home_in,
+        away_team=away_in,
+        base_weight=MARKET_PRIOR_WEIGHT
+    )
+    posterior_1x2 = adaptive_weight * np.array(fair_1x2) + (1.0 - adaptive_weight) * np.array(clf_probs)
+    posterior_1x2 /= posterior_1x2.sum()
+    probs['H'] = float(posterior_1x2[0])
+    probs['D'] = float(posterior_1x2[1])
+    probs['A'] = float(posterior_1x2[2])
+    
+    # Draw No Bet (DNB / Asian Handicap 0) calculations
+    p_h_dnb, p_a_dnb = compute_dnb_probs(posterior_1x2)
+    fair_h_dnb, fair_a_dnb = compute_dnb_probs(fair_1x2)
+    dnb_h_odds, dnb_a_odds = compute_dnb_odds(h_odds, d_odds, a_odds)
+
     # 4. Display Analysis
     bankroll = 1000.0
     r_h = elo_tracker.get_rating(home_in)
     r_a = elo_tracker.get_rating(away_in)
     
-    print("\n" + "=" * 90)
+    print("\n" + "=" * 95)
     print(f"MATCHUP: {home_in} (Elo: {r_h:.0f}) vs {away_in} (Elo: {r_a:.0f})")
-    print(f"Expected Goals (xG): {home_in} {lambda_h:.2f} - {lambda_a:.2f} {away_in} | Most Likely Score: {probs['Score']}")
+    print(f"Expected Goals (xG): {home_in} {lambda_h:.2f} - {lambda_a:.2f} {away_in} | Synthetic xG Diff: {feat_dict['Expected_Goals_Diff']:+.2f} | H2H Dominance: {feat_dict['H2H_Dominance']:+.2f}")
     print(f"Shot Accuracy (SAR): {home_in} {feat_dict['Home_Shot_Acc']:.1%} | {away_in} {feat_dict['Away_Shot_Acc']:.1%}")
     print(f"Finishing Conv (FCE): {home_in} {feat_dict['Home_Goal_Conv']:.1%} | {away_in} {feat_dict['Away_Goal_Conv']:.1%}")
-    print("=" * 90)
-    print(f"{'MARKET SELECTION':<18} | {'AI PROB':<9} | {'RAW BOOKIE':<10} | {'FAIR MKT':<9} | {'EDGE':<8} | {'SUGGESTED STAKE'}")
-    print("-" * 90)
+    print(f"Adaptive Market Shrinkage: {adaptive_weight:.1%} Market / {1.0 - adaptive_weight:.1%} Tactical ML")
+    print("=" * 95)
+    print(f"{'MARKET SELECTION':<20} | {'AI POSTERIOR':<12} | {'RAW BOOKIE':<10} | {'FAIR MKT':<9} | {'EDGE':<8} | {'SUGGESTED STAKE'}")
+    print("-" * 95)
     
     markets = [
-        ('H2H', 'H', probs['H'], h_odds, fair_1x2[0], f"{home_in} Win", True),
-        ('H2H', 'D', probs['D'], d_odds, fair_1x2[1], "Draw", True),
-        ('H2H', 'A', probs['A'], a_odds, fair_1x2[2], f"{away_in} Win", True),
-        ('Totals', 'Over2.5', probs['Over2.5'], over_odds, 1.0/over_odds, "Over 2.5 Goals", False),
-        ('BTTS', 'BTTS_Yes', probs['BTTS_Yes'], btts_odds, 1.0/btts_odds, "BTTS (Yes)", False)
+        ('1X2', 'H', probs['H'], h_odds, fair_1x2[0], f"{home_in} Win", False),
+        ('1X2', 'D', probs['D'], d_odds, fair_1x2[1], "Draw", False),
+        ('1X2', 'A', probs['A'], a_odds, fair_1x2[2], f"{away_in} Win", False),
+        ('DNB', 'H_DNB', p_h_dnb, dnb_h_odds, fair_h_dnb, f"{home_in} DNB", True),
+        ('DNB', 'A_DNB', p_a_dnb, dnb_a_odds, fair_a_dnb, f"{away_in} DNB", True),
     ]
     
     edges_detected = False
-    for m_cat, key, model_p, odds, fair_p, label, is_1x2 in markets:
-        # Shrunk edge against fair de-vigged market
-        shrunk_p = 0.70 * model_p + 0.30 * fair_p
-        edge = shrunk_p - fair_p
+    p_draw = fair_1x2[1]
+    
+    for m_cat, key, model_p, odds, fair_p, label, is_dnb in markets:
+        # Edge of empirical Bayes posterior against fair market baseline
+        edge = model_p - fair_p
+        raw_divergence = abs(model_p - fair_p)
         
         stake = calculate_kelly(
             prob=model_p, odds=odds, bankroll=bankroll,
-            fraction=0.10, max_stake_pct=0.025, shrinkage=0.30,
-            min_prob=0.20 if is_1x2 else 0.40,
-            max_odds=3.80 if is_1x2 else 2.50
+            fraction=KELLY_FRACTION, max_stake_pct=MAX_STAKE_PCT,
+            min_odds=MIN_ODDS, max_odds=MAX_ODDS, min_edge=MIN_EDGE,
+            max_divergence=MAX_DIVERGENCE,
+            fair_market_prob=fair_p,
+            max_draw_risk=MAX_DRAW_RISK,
+            draw_prob=p_draw,
+            is_dnb=is_dnb
         )
         
-        stake_str = f"Bet ${stake:.2f}" if stake > 0 else "Pass"
-        if stake > 0:
+        effective_min_odds = 1.40 if is_dnb else MIN_ODDS
+        if not is_dnb and MAX_DRAW_RISK is not None and p_draw > MAX_DRAW_RISK:
+            stake_str = f"Pass (Draw Risk {p_draw:.1%} > {MAX_DRAW_RISK:.0%} - High Variance)"
+        elif raw_divergence > MAX_DIVERGENCE:
+            stake_str = f"Pass (Divergence {raw_divergence:.1%} > {MAX_DIVERGENCE:.0%} - Adverse Selection Risk)"
+        elif odds < effective_min_odds or odds > MAX_ODDS:
+            stake_str = f"Pass (Odds {odds:.2f} out of [{effective_min_odds:.2f}, {MAX_ODDS:.2f}])"
+        elif stake > 0:
+            stake_str = f"Bet ${stake:.2f}"
             edges_detected = True
+        else:
+            stake_str = f"Pass (< {MIN_EDGE:.1%} Edge)"
             
-        print(f"{label:<18} | {model_p:<9.1%} | {1.0/odds:<10.1%} | {fair_p:<9.1%} | {edge:<+8.1%} | {stake_str}")
+        print(f"{label:<20} | {model_p:<12.1%} | {1.0/odds:<10.1%} | {fair_p:<9.1%} | {edge:<+8.1%} | {stake_str}")
         
-    print("-" * 90)
+    print("-" * 95)
     if edges_detected:
-        print(">> STATISTICAL VALUE DETECTED. Bet sizing calculated with Tenth-Kelly (max 2.5%).")
+        print(f">> STATISTICAL VALUE DETECTED. Bet sizing calculated with Tenth-Kelly (max {MAX_STAKE_PCT:.1%}).")
+        if p_draw > MAX_DRAW_RISK:
+            print(">> NOTE: 1X2 selections with elevated draw risk were filtered to DNB alternatives (draws refund stake).")
     else:
         print(">> NO MATHEMATICAL EDGE. Bookmaker prices are efficient for this fixture.")
-    print("=" * 90)
+    print("=" * 95)
 
     # 5. Log Predictions
-    for m_cat, key, model_p, odds, fair_p, label, is_1x2 in markets:
+    for m_cat, key, model_p, odds, fair_p, label, is_dnb in markets:
+        edge = model_p - fair_p
         stake = calculate_kelly(
             prob=model_p, odds=odds, bankroll=bankroll,
-            fraction=0.10, max_stake_pct=0.025, shrinkage=0.30,
-            min_prob=0.20 if is_1x2 else 0.40,
-            max_odds=3.80 if is_1x2 else 2.50
+            fraction=KELLY_FRACTION, max_stake_pct=MAX_STAKE_PCT,
+            min_odds=MIN_ODDS, max_odds=MAX_ODDS, min_edge=MIN_EDGE,
+            max_divergence=MAX_DIVERGENCE,
+            fair_market_prob=fair_p,
+            max_draw_risk=MAX_DRAW_RISK,
+            draw_prob=p_draw,
+            is_dnb=is_dnb
         )
         if stake > 0:
-            shrunk_p = 0.70 * model_p + 0.30 * fair_p
-            edge = shrunk_p - fair_p
             log_prediction(
                 home=home_in, away=away_in, market=m_cat, selection=label,
                 model_prob=model_p, market_odds=odds, edge=edge,

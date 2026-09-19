@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import requests
+import io
 import os
 import math
 from datetime import datetime, timedelta
@@ -8,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & QUANT HYPERPARAMETERS ---
 API_KEY = os.getenv("ODDS_API_KEY") 
 SPORT_KEY = "soccer_epl"   # Premier League
 REGION = "uk"              # Options: us, uk, eu, au
@@ -16,6 +17,17 @@ MARKET = "h2h,totals"      # 1X2 and Over/Under Goals (totals)
 LOG_FILE = "data/prediction_log.csv"
 DATA_CACHE = "data/historical_data.csv"
 MODEL_CACHE = "data/models.joblib"
+
+# Unified Strategy Parameters (aligned across backtest, live scanner, and predictor)
+MARKET_PRIOR_WEIGHT = 0.50       # Empirical Bayes shrinkage towards market (50% market, 50% tactical ML)
+MAX_DIVERGENCE = 0.10            # Adverse selection protection threshold (10% max allowable divergence)
+MIN_ODDS = 1.90                  # Lower bound of verified profitable odds band
+MAX_ODDS = 2.80                  # Upper bound of verified profitable odds band
+MIN_EDGE = 0.030                 # Minimum edge hurdle (3.0%) post-shrinkage
+MAX_DRAW_RISK = 0.28             # Maximum allowable market draw probability for 1X2 bets
+KELLY_FRACTION = 0.10            # Tenth-Kelly conservative sizing
+MAX_STAKE_PCT = 0.025            # Maximum single-bet risk (2.5% of bankroll)
+
 
 # --- TEAM MAPPING (Odds API / Alternate Names -> Football-Data Standard) ---
 TEAM_MAPPING = {
@@ -71,59 +83,80 @@ def fetch_historical_data(start_year=16, end_year=25, force_refresh=False):
         'HS', 'AS', 'HST', 'AST', 'HC', 'AC',
         'HF', 'AF', 'HY', 'AY', 'HR', 'AR'
     ]
-    odds_cols = ['B365H', 'B365D', 'B365A', 'B365>2.5', 'B365<2.5', 'BbAv>2.5', 'BbAv<2.5', 'AvgH', 'AvgD', 'AvgA']
+    odds_cols = [
+        'B365H', 'B365D', 'B365A', 'B365>2.5', 'B365<2.5', 'BbAv>2.5', 'BbAv<2.5',
+        'AvgH', 'AvgD', 'AvgA', 'MaxH', 'MaxD', 'MaxA', 'BbMxH', 'BbMxD', 'BbMxA',
+        'PSH', 'PSD', 'PSA', 'PSCH', 'PSCD', 'PSCA', 'MaxCH', 'MaxCD', 'MaxCA',
+        'AvgCH', 'AvgCD', 'AvgCA', 'B365CH', 'B365CD', 'B365CA'
+    ]
     all_desired_cols = essential_cols + odds_cols
     current_season_code = f"{end_year:02d}{end_year+1:02d}"
     
-    # Check if cached data exists and contains the expanded columns
+    # Check if cached data exists and contains the expanded columns including Max and Pinnacle closing odds
     if os.path.exists(DATA_CACHE) and not force_refresh:
         try:
             cached_df = pd.read_csv(DATA_CACHE)
-            # Verify cache has required halftime and card columns
-            if 'HTHG' in cached_df.columns and 'HY' in cached_df.columns:
+            # Verify cache has required halftime, card, line shopping, and Pinnacle closing columns
+            if 'HTHG' in cached_df.columns and 'HY' in cached_df.columns and 'MaxH' in cached_df.columns and 'PSCH' in cached_df.columns:
                 cached_df['Date'] = pd.to_datetime(cached_df['Date'])
                 cached_df['Season'] = cached_df['Season'].astype(str)
                 
                 # Fetch only the active current season to append latest games
                 url_current = f"https://www.football-data.co.uk/mmz4281/{current_season_code}/E0.csv"
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                 try:
-                    curr_df = pd.read_csv(url_current)
-                    avail_cols = [c for c in all_desired_cols if c in curr_df.columns]
-                    curr_df = curr_df[avail_cols].copy()
-                    curr_df['Date'] = pd.to_datetime(curr_df['Date'], dayfirst=True)
-                    curr_df['Season'] = str(current_season_code)
-                    curr_df['HomeTeam'] = curr_df['HomeTeam'].map(normalize_team)
-                    curr_df['AwayTeam'] = curr_df['AwayTeam'].map(normalize_team)
-                    
-                    historical_prior = cached_df[cached_df['Season'] != str(current_season_code)]
-                    combined = pd.concat([historical_prior, curr_df], ignore_index=True)
-                    combined = combined.dropna(subset=['Date', 'HomeTeam', 'AwayTeam', 'FTR'])
-                    combined = combined.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
-                    combined = combined.sort_values('Date').reset_index(drop=True)
-                    combined.to_csv(DATA_CACHE, index=False)
-                    return _add_sample_weights(combined)
+                    resp = requests.get(url_current, headers=headers, timeout=10)
+                    if resp.status_code == 200 and len(resp.text) > 100:
+                        curr_df = pd.read_csv(io.StringIO(resp.text))
+                        avail_cols = [c for c in all_desired_cols if c in curr_df.columns]
+                        curr_df = curr_df[avail_cols].copy()
+                        curr_df['Date'] = pd.to_datetime(curr_df['Date'], dayfirst=True)
+                        curr_df['Season'] = str(current_season_code)
+                        curr_df['HomeTeam'] = curr_df['HomeTeam'].map(normalize_team)
+                        curr_df['AwayTeam'] = curr_df['AwayTeam'].map(normalize_team)
+                        curr_df = _standardize_max_odds(curr_df)
+                        
+                        historical_prior = cached_df[cached_df['Season'] != str(current_season_code)]
+                        combined = pd.concat([historical_prior, curr_df], ignore_index=True)
+                        combined = combined.dropna(subset=['Date', 'HomeTeam', 'AwayTeam', 'FTR'])
+                        combined = combined.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
+                        combined = combined.sort_values('Date').reset_index(drop=True)
+                        combined = _standardize_max_odds(combined)
+                        combined.to_csv(DATA_CACHE, index=False)
+                        return _add_sample_weights(combined)
+                    else:
+                        cached_df = cached_df.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
+                        cached_df = _standardize_max_odds(cached_df)
+                        return _add_sample_weights(cached_df)
                 except Exception as e:
                     cached_df = cached_df.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
+                    cached_df = _standardize_max_odds(cached_df)
                     return _add_sample_weights(cached_df)
         except Exception:
             pass  # Fall through to re-download
             
-    # Download all 10 seasons with expanded feature columns
-    print(f"Downloading historical Premier League seasons with expanded stats (20{start_year}/20{start_year+1} to 20{end_year}/20{end_year+1})...")
+    # Download all 10 seasons with expanded feature, line-shopping, and closing odds columns
+    print(f"Downloading historical Premier League seasons with closing odds (20{start_year}/20{start_year+1} to 20{end_year}/20{end_year+1})...")
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     dfs = []
     for y in range(start_year, end_year + 1):
         season_code = f"{y:02d}{y+1:02d}"
         url = f"https://www.football-data.co.uk/mmz4281/{season_code}/E0.csv"
         try:
-            season_df = pd.read_csv(url)
-            avail_cols = [c for c in all_desired_cols if c in season_df.columns]
-            season_df = season_df[avail_cols].copy()
-            season_df['Date'] = pd.to_datetime(season_df['Date'], dayfirst=True)
-            season_df['Season'] = str(season_code)
-            season_df['HomeTeam'] = season_df['HomeTeam'].map(normalize_team)
-            season_df['AwayTeam'] = season_df['AwayTeam'].map(normalize_team)
-            dfs.append(season_df)
-            print(f"  [OK] Season {season_code} loaded: {len(season_df)} matches")
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                season_df = pd.read_csv(io.StringIO(resp.text))
+                avail_cols = [c for c in all_desired_cols if c in season_df.columns]
+                season_df = season_df[avail_cols].copy()
+                season_df['Date'] = pd.to_datetime(season_df['Date'], dayfirst=True)
+                season_df['Season'] = str(season_code)
+                season_df['HomeTeam'] = season_df['HomeTeam'].map(normalize_team)
+                season_df['AwayTeam'] = season_df['AwayTeam'].map(normalize_team)
+                season_df = _standardize_max_odds(season_df)
+                dfs.append(season_df)
+                print(f"  [OK] Season {season_code} loaded: {len(season_df)} matches")
+            else:
+                print(f"  [!] HTTP {resp.status_code} loading season {season_code}")
         except Exception as e:
             print(f"  [!] Could not load season {season_code}: {e}")
             
@@ -135,12 +168,35 @@ def fetch_historical_data(start_year=16, end_year=25, force_refresh=False):
     df_combined = df_combined.dropna(subset=['Date', 'HomeTeam', 'AwayTeam', 'FTR'])
     df_combined = df_combined.drop_duplicates(subset=['Date', 'HomeTeam', 'AwayTeam'], keep='last')
     df_combined = df_combined.sort_values('Date').reset_index(drop=True)
+    df_combined = _standardize_max_odds(df_combined)
     
     # Save cache
     df_combined.to_csv(DATA_CACHE, index=False)
-    print(f"Dataset cached to {DATA_CACHE} (Total: {len(df_combined)} matches).")
+    print(f"Dataset cached to {DATA_CACHE} with closing odds (Total: {len(df_combined)} matches).")
     
     return _add_sample_weights(df_combined)
+
+def _standardize_max_odds(df):
+    """Ensures MaxH, MaxD, MaxA and Pinnacle Closing PSCH, PSCD, PSCA exist with proper fallbacks."""
+    # 1. Line shopping Max odds
+    for col, bbmx_col, b365_col in [('MaxH', 'BbMxH', 'B365H'), ('MaxD', 'BbMxD', 'B365D'), ('MaxA', 'BbMxA', 'B365A')]:
+        if col not in df.columns:
+            df[col] = df.get(bbmx_col, df.get(b365_col, np.nan))
+        else:
+            df[col] = df[col].fillna(df.get(bbmx_col, df.get(b365_col, np.nan)))
+            
+    # 2. Pinnacle closing odds (gold standard benchmark for CLV)
+    for col, maxc_col, b365c_col, open_col in [
+        ('PSCH', 'MaxCH', 'B365CH', 'PSH'),
+        ('PSCD', 'MaxCD', 'B365CD', 'PSD'),
+        ('PSCA', 'MaxCA', 'B365CA', 'PSA')
+    ]:
+        fallback = df.get(maxc_col, df.get(b365c_col, df.get(open_col, df.get(open_col.replace('PS', 'B365'), np.nan))))
+        if col not in df.columns:
+            df[col] = fallback
+        else:
+            df[col] = df[col].fillna(fallback)
+    return df
 
 def _add_sample_weights(df, half_life_days=500):
     """Applies exponential time-decay sample weights so recent form has higher influence."""
@@ -187,6 +243,103 @@ def devig_odds_proportional(odds_list):
     raw_probs = [1.0 / o if o > 1.0 else 0.0 for o in odds_list]
     s = sum(raw_probs)
     return [p / s for p in raw_probs] if s > 0 else raw_probs
+
+
+# --- 2b. DRAW NO BET (DNB) & ADVANCED BAYESIAN PROBABILITY ENGINE ---
+
+def compute_dnb_probs(probs_1x2):
+    """
+    Computes Draw No Bet (DNB / Asian Handicap 0) conditional probabilities from 1X2 distribution.
+    Conditioned on a non-draw outcome:
+    P(Home DNB) = P(H) / (P(H) + P(A)), P(Away DNB) = P(A) / (P(H) + P(A)).
+    """
+    p_h = float(probs_1x2[0])
+    p_a = float(probs_1x2[2])
+    denom = p_h + p_a
+    if denom <= 0.0:
+        return [0.5, 0.5]
+    return [p_h / denom, p_a / denom]
+
+def compute_dnb_odds(h_odd, d_odd, a_odd):
+    """
+    Computes synthetic Draw No Bet (DNB / Asian Handicap 0) decimal odds from 1X2 prices.
+    By hedging a fraction on Draw to refund the stake if the match draws:
+    Odds_DNB_Home = O_H * (1 - 1 / O_D) = O_H * (O_D - 1) / O_D
+    Odds_DNB_Away = O_A * (1 - 1 / O_D) = O_A * (O_D - 1) / O_D
+    """
+    if h_odd <= 1.0 or d_odd <= 1.0 or a_odd <= 1.0:
+        return [0.0, 0.0]
+    home_dnb = h_odd * (d_odd - 1.0) / d_odd
+    away_dnb = a_odd * (d_odd - 1.0) / d_odd
+    return [round(home_dnb, 3), round(away_dnb, 3)]
+
+def blend_probabilities_logit(p_mkt, p_ml, prior_weight=0.50, class_prior=None):
+    """
+    Combines market prior with ML prediction in Dirichlet / Log-Odds space:
+    z_i = log(p_mkt_i) + (1 - prior_weight) * log(p_ml_i / class_prior_i)
+    Softmax normalizes back to a valid probability simplex.
+    Preserves calibration at distribution extremes without linear flattening.
+    """
+    if class_prior is None:
+        class_prior = [0.45, 0.25, 0.30]  # Empirical Premier League class prior [H, D, A]
+        
+    p_mkt = np.clip(np.array(p_mkt, dtype=float), 1e-6, 1.0)
+    p_ml = np.clip(np.array(p_ml, dtype=float), 1e-6, 1.0)
+    class_prior = np.clip(np.array(class_prior, dtype=float), 1e-6, 1.0)
+    
+    alpha = 1.0 - prior_weight
+    # Log-ratio update relative to base rate
+    z = np.log(p_mkt) + alpha * np.log(p_ml / class_prior)
+    # Numerical stability shift
+    z -= np.max(z)
+    exp_z = np.exp(z)
+    return list(exp_z / np.sum(exp_z))
+
+def get_adaptive_market_weight(match_date, season_start_date=None, home_team=None, away_team=None, base_weight=MARKET_PRIOR_WEIGHT):
+    """
+    Dynamically scales market prior weight based on gameweek seasonality and team uncertainty:
+    - Early season (GW 1-6, days < 45): Higher market weight (0.60 - 0.70) due to low current-season sample size.
+    - Mid/Late season (GW 20-38, days > 120): Lower market weight (0.45 - 0.50) as team EMAs stabilize.
+    - Promoted team penalty: +0.08 market weight when facing clubs newly promoted to the Premier League.
+    """
+    if match_date is None or pd.isna(match_date):
+        match_dt = pd.Timestamp.now()
+    else:
+        match_dt = pd.to_datetime(match_date)
+        if pd.isna(match_dt):
+            match_dt = pd.Timestamp.now()
+            
+    if season_start_date is None:
+        year = int(match_dt.year if match_dt.month >= 8 else match_dt.year - 1)
+        season_start_date = pd.Timestamp(year=year, month=8, day=12)
+    else:
+        season_start_date = pd.to_datetime(season_start_date)
+        
+    days_into_season = max(0, (match_dt - season_start_date).days)
+    
+    # Seasonality decay: starts at +0.15 in August and decays across first 150 days
+    seasonality_adjustment = max(-0.05, 0.15 - (days_into_season / 150.0) * 0.20)
+    
+    promoted_by_season = {
+        '2122': {'Brentford', 'Norwich', 'Watford'},
+        '2223': {'Fulham', 'Bournemouth', "Nott'm Forest"},
+        '2324': {'Burnley', 'Sheffield United', 'Luton'},
+        '2425': {'Leicester', 'Ipswich', 'Southampton'},
+        '2526': {'Leeds', 'Sunderland', 'Burnley'}
+    }
+    
+    promoted_penalty = 0.0
+    h_norm = normalize_team(home_team) if home_team else None
+    a_norm = normalize_team(away_team) if away_team else None
+    
+    for s_code, p_teams in promoted_by_season.items():
+        if (h_norm in p_teams or a_norm in p_teams) and str(match_dt.year)[-2:] in s_code:
+            promoted_penalty = 0.08
+            break
+            
+    adaptive_weight = base_weight + seasonality_adjustment + promoted_penalty
+    return float(np.clip(adaptive_weight, 0.35, 0.75))
+
 
 
 # --- 3. DYNAMIC ELO RATING SYSTEM ---
@@ -252,14 +405,28 @@ class FootballEloTracker:
 
 # --- 4. ADVANCED FEATURE ENGINEERING (SYNTHETIC xG, FORM & DISCIPLINE) ---
 
+def compute_ema(values, alpha=0.25, default=0.0):
+    """
+    Computes exponential moving average over past chronological values.
+    alpha = 0.25 models ~8-match tactical form horizon.
+    alpha = 0.08 models ~25-match team baseline ability horizon.
+    """
+    if not values:
+        return default
+    weights = [(1.0 - alpha) ** (len(values) - 1 - i) for i in range(len(values))]
+    total_w = sum(weights)
+    if total_w <= 0.0:
+        return default
+    return sum(v * w for v, w in zip(values, weights)) / total_w
+
 def add_pre_match_features(df, n_games=5):
     """
-    Computes pre-match features sequentially without future leakage:
+    Computes pre-match features sequentially without future leakage using Dual-Horizon EMAs:
     - Pre-match Elo ratings and differentials
-    - Venue-specific form (Home form at home, Away form away)
+    - Venue-specific form (Home form at home, Away form away via venue EMA)
     - Synthetic xG / Shot Quality: Shot Accuracy (HST/HS), Conversion Efficiency (Goals/HST),
       Defensive Target Shot Suppression
-    - Discipline pressure (yellow/red card index)
+    - Discipline pressure (yellow/red card index via tactical EMA)
     - Second-half momentum ratio
     - Calendar rest days (capped at 14)
     """
@@ -283,11 +450,13 @@ def add_pre_match_features(df, n_games=5):
     home_def_suppress, away_def_suppress = [], []
     home_card_stress, away_card_stress = [], []
     home_2h_momentum, away_2h_momentum = [], []
+    xg_diff_list, h2h_dom_list = [], []
     
     # Rest days
     home_rest_list, away_rest_list = [], []
     
     team_history = {}
+    h2h_history = {}
     
     for idx, row in df.iterrows():
         h = normalize_team(row['HomeTeam'])
@@ -312,14 +481,14 @@ def add_pre_match_features(df, n_games=5):
         home_rest_list.append(round(h_rest, 1))
         away_rest_list.append(round(a_rest, 1))
         
-        # Venue-Specific Stats
-        h_home = [m for m in h_past if m['is_home']][-n_games:]
+        # Venue-Specific Stats (decaying across historical venue games with alpha=0.20)
+        h_home = [m for m in h_past if m['is_home']]
         if len(h_home) > 0:
-            hvgf = np.mean([m['gf'] for m in h_home])
-            hvga = np.mean([m['ga'] for m in h_home])
-            hvs = np.mean([m['shots'] for m in h_home])
-            hvsot = np.mean([m['sot'] for m in h_home])
-            hvc = np.mean([m['corners'] for m in h_home])
+            hvgf = compute_ema([m['gf'] for m in h_home], alpha=0.20, default=1.5)
+            hvga = compute_ema([m['ga'] for m in h_home], alpha=0.20, default=1.2)
+            hvs = compute_ema([m['shots'] for m in h_home], alpha=0.20, default=12.5)
+            hvsot = compute_ema([m['sot'] for m in h_home], alpha=0.20, default=4.2)
+            hvc = compute_ema([m['corners'] for m in h_home], alpha=0.20, default=5.5)
         else:
             hvgf, hvga, hvs, hvsot, hvc = 1.5, 1.2, 12.5, 4.2, 5.5
             
@@ -329,13 +498,13 @@ def add_pre_match_features(df, n_games=5):
         home_v_sot.append(round(hvsot, 2))
         home_v_corners.append(round(hvc, 2))
         
-        a_away = [m for m in a_past if not m['is_home']][-n_games:]
+        a_away = [m for m in a_past if not m['is_home']]
         if len(a_away) > 0:
-            avgf = np.mean([m['gf'] for m in a_away])
-            avga = np.mean([m['ga'] for m in a_away])
-            avs = np.mean([m['shots'] for m in a_away])
-            avsot = np.mean([m['sot'] for m in a_away])
-            avc = np.mean([m['corners'] for m in a_away])
+            avgf = compute_ema([m['gf'] for m in a_away], alpha=0.20, default=1.1)
+            avga = compute_ema([m['ga'] for m in a_away], alpha=0.20, default=1.6)
+            avs = compute_ema([m['shots'] for m in a_away], alpha=0.20, default=9.5)
+            avsot = compute_ema([m['sot'] for m in a_away], alpha=0.20, default=3.2)
+            avc = compute_ema([m['corners'] for m in a_away], alpha=0.20, default=4.2)
         else:
             avgf, avga, avs, avsot, avc = 1.1, 1.6, 9.5, 3.2, 4.2
             
@@ -345,33 +514,29 @@ def add_pre_match_features(df, n_games=5):
         away_v_sot.append(round(avsot, 2))
         away_v_corners.append(round(avc, 2))
         
-        # Overall Form
-        h_all = h_past[-n_games:]
-        a_all = a_past[-n_games:]
+        # Overall Dual-Horizon Form (8-match tactical EMA, alpha=0.25)
+        home_all_gf.append(round(compute_ema([m['gf'] for m in h_past], alpha=0.25, default=1.4), 2))
+        home_all_ga.append(round(compute_ema([m['ga'] for m in h_past], alpha=0.25, default=1.3), 2))
+        home_all_sot.append(round(compute_ema([m['sot'] for m in h_past], alpha=0.25, default=4.0), 2))
         
-        home_all_gf.append(round(np.mean([m['gf'] for m in h_all]), 2) if len(h_all) > 0 else 1.4)
-        home_all_ga.append(round(np.mean([m['ga'] for m in h_all]), 2) if len(h_all) > 0 else 1.3)
-        home_all_sot.append(round(np.mean([m['sot'] for m in h_all]), 2) if len(h_all) > 0 else 4.0)
+        away_all_gf.append(round(compute_ema([m['gf'] for m in a_past], alpha=0.25, default=1.3), 2))
+        away_all_ga.append(round(compute_ema([m['ga'] for m in a_past], alpha=0.25, default=1.4), 2))
+        away_all_sot.append(round(compute_ema([m['sot'] for m in a_past], alpha=0.25, default=3.8), 2))
         
-        away_all_gf.append(round(np.mean([m['gf'] for m in a_all]), 2) if len(a_all) > 0 else 1.3)
-        away_all_ga.append(round(np.mean([m['ga'] for m in a_all]), 2) if len(a_all) > 0 else 1.4)
-        away_all_sot.append(round(np.mean([m['sot'] for m in a_all]), 2) if len(a_all) > 0 else 3.8)
-        
-        # Synthetic xG & Shot Quality Ratios
-        if len(h_all) > 0:
-            h_tot_shots = sum(m['shots'] for m in h_all)
-            h_tot_sot = sum(m['sot'] for m in h_all)
-            h_tot_gf = sum(m['gf'] for m in h_all)
-            h_tot_opp_shots = sum(m['opp_shots'] for m in h_all)
-            h_tot_opp_sot = sum(m['opp_sot'] for m in h_all)
-            h_cards = sum(m['cards'] for m in h_all)
-            h_2h_goals = sum(m['2h_gf'] for m in h_all)
+        # Synthetic xG & Shot Quality via Dual-Horizon EMA
+        if len(h_past) > 0:
+            h_tot_shots = compute_ema([m['shots'] for m in h_past], alpha=0.15, default=11.0)
+            h_tot_sot = compute_ema([m['sot'] for m in h_past], alpha=0.15, default=4.0)
+            h_tot_gf = compute_ema([m['gf'] for m in h_past], alpha=0.15, default=1.4)
+            h_tot_opp_shots = compute_ema([m['opp_shots'] for m in h_past], alpha=0.15, default=11.0)
+            h_tot_opp_sot = compute_ema([m['opp_sot'] for m in h_past], alpha=0.15, default=4.0)
+            h_card_idx = compute_ema([m['cards'] for m in h_past], alpha=0.25, default=1.8)
+            h_2h_goals = compute_ema([m['2h_gf'] for m in h_past], alpha=0.25, default=0.7)
             
-            h_acc = (h_tot_sot / max(1.0, h_tot_shots))
-            h_conv = (h_tot_gf / max(1.0, h_tot_sot))
-            h_supp = (h_tot_opp_sot / max(1.0, h_tot_opp_shots))
-            h_card_idx = h_cards / len(h_all)
-            h_2h_ratio = h_2h_goals / max(1.0, h_tot_gf)
+            h_acc = h_tot_sot / max(1.0, h_tot_shots)
+            h_conv = h_tot_gf / max(1.0, h_tot_sot)
+            h_supp = h_tot_opp_sot / max(1.0, h_tot_opp_shots)
+            h_2h_ratio = h_2h_goals / max(0.5, h_tot_gf)
         else:
             h_acc, h_conv, h_supp, h_card_idx, h_2h_ratio = 0.33, 0.30, 0.33, 1.8, 0.55
             
@@ -379,22 +544,21 @@ def add_pre_match_features(df, n_games=5):
         home_goal_conv.append(round(h_conv, 3))
         home_def_suppress.append(round(h_supp, 3))
         home_card_stress.append(round(h_card_idx, 2))
-        home_2h_momentum.append(round(h_2h_ratio, 3))
+        home_2h_momentum.append(round(min(1.0, h_2h_ratio), 3))
         
-        if len(a_all) > 0:
-            a_tot_shots = sum(m['shots'] for m in a_all)
-            a_tot_sot = sum(m['sot'] for m in a_all)
-            a_tot_gf = sum(m['gf'] for m in a_all)
-            a_tot_opp_shots = sum(m['opp_shots'] for m in a_all)
-            a_tot_opp_sot = sum(m['opp_sot'] for m in a_all)
-            a_cards = sum(m['cards'] for m in a_all)
-            a_2h_goals = sum(m['2h_gf'] for m in a_all)
+        if len(a_past) > 0:
+            a_tot_shots = compute_ema([m['shots'] for m in a_past], alpha=0.15, default=10.0)
+            a_tot_sot = compute_ema([m['sot'] for m in a_past], alpha=0.15, default=3.5)
+            a_tot_gf = compute_ema([m['gf'] for m in a_past], alpha=0.15, default=1.2)
+            a_tot_opp_shots = compute_ema([m['opp_shots'] for m in a_past], alpha=0.15, default=11.0)
+            a_tot_opp_sot = compute_ema([m['opp_sot'] for m in a_past], alpha=0.15, default=4.0)
+            a_card_idx = compute_ema([m['cards'] for m in a_past], alpha=0.25, default=1.8)
+            a_2h_goals = compute_ema([m['2h_gf'] for m in a_past], alpha=0.25, default=0.6)
             
-            a_acc = (a_tot_sot / max(1.0, a_tot_shots))
-            a_conv = (a_tot_gf / max(1.0, a_tot_sot))
-            a_supp = (a_tot_opp_sot / max(1.0, a_tot_opp_shots))
-            a_card_idx = a_cards / len(a_all)
-            a_2h_ratio = a_2h_goals / max(1.0, a_tot_gf)
+            a_acc = a_tot_sot / max(1.0, a_tot_shots)
+            a_conv = a_tot_gf / max(1.0, a_tot_sot)
+            a_supp = a_tot_opp_sot / max(1.0, a_tot_opp_shots)
+            a_2h_ratio = a_2h_goals / max(0.5, a_tot_gf)
         else:
             a_acc, a_conv, a_supp, a_card_idx, a_2h_ratio = 0.33, 0.30, 0.33, 1.8, 0.55
             
@@ -402,7 +566,22 @@ def add_pre_match_features(df, n_games=5):
         away_goal_conv.append(round(a_conv, 3))
         away_def_suppress.append(round(a_supp, 3))
         away_card_stress.append(round(a_card_idx, 2))
-        away_2h_momentum.append(round(a_2h_ratio, 3))
+        away_2h_momentum.append(round(min(1.0, a_2h_ratio), 3))
+        
+        # Synthetic xG differential (attacking volume * conversion * opp suppression)
+        h_xg = round(hvs * h_acc * h_conv * (a_supp / 0.33), 2)
+        a_xg = round(avs * a_acc * a_conv * (h_supp / 0.33), 2)
+        xg_diff_list.append(round(h_xg - a_xg, 2))
+        
+        # Head-to-Head historical matchup dominance
+        h2h_key = tuple(sorted([h, a]))
+        past_meetings = h2h_history.get(h2h_key, [])
+        if len(past_meetings) > 0:
+            h2h_diffs = [m['diff'] if m['home'] == h else -m['diff'] for m in past_meetings]
+            h2h_dom = compute_ema(h2h_diffs, alpha=0.35, default=0.0)
+        else:
+            h2h_dom = 0.0
+        h2h_dom_list.append(round(h2h_dom, 2))
         
         # Post-match stats extraction
         fthg = float(row['FTHG'])
@@ -434,6 +613,9 @@ def add_pre_match_features(df, n_games=5):
             'date': date, 'is_home': False, 'gf': ftag, 'ga': fthg,
             'shots': as_, 'sot': ast, 'opp_shots': hs, 'opp_sot': hst,
             'corners': ac, 'cards': ay + 2.0 * ar, '2h_gf': max(0.0, ftag - htag)
+        })
+        h2h_history.setdefault(h2h_key, []).append({
+            'date': date, 'home': h, 'diff': fthg - ftag
         })
 
     # Attach all feature columns
@@ -475,6 +657,8 @@ def add_pre_match_features(df, n_games=5):
     df['Away_Card_Stress'] = away_card_stress
     df['Home_2H_Momentum'] = home_2h_momentum
     df['Away_2H_Momentum'] = away_2h_momentum
+    df['Expected_Goals_Diff'] = xg_diff_list
+    df['H2H_Dominance'] = h2h_dom_list
     
     # 1X2 Target
     ftr_map = {'H': 0, 'D': 1, 'A': 2}
@@ -482,8 +666,8 @@ def add_pre_match_features(df, n_games=5):
     
     return df, elo_tracker
 
-def get_live_match_features(df, elo_tracker, home_team, away_team, match_date=None, n_games=5):
-    """Computes real-time pre-match feature vectors for an upcoming game."""
+def get_live_match_features(df, elo_tracker, home_team, away_team, match_date=None, **kwargs):
+    """Computes real-time pre-match feature vectors using Dual-Horizon EMAs."""
     h = normalize_team(home_team)
     a = normalize_team(away_team)
     match_date = pd.Timestamp.now() if match_date is None else pd.to_datetime(match_date)
@@ -498,57 +682,80 @@ def get_live_match_features(df, elo_tracker, home_team, away_team, match_date=No
     h_rest = 7.0 if len(h_matches) == 0 else min(14.0, (match_date - h_matches.iloc[-1]['Date']).total_seconds() / 86400.0)
     a_rest = 7.0 if len(a_matches) == 0 else min(14.0, (match_date - a_matches.iloc[-1]['Date']).total_seconds() / 86400.0)
     
-    # Venue stats
-    h_home = df[(df['HomeTeam'] == h) & (df['Date'] < match_date)].sort_values('Date').tail(n_games)
-    hv_gf = h_home['FTHG'].mean() if len(h_home) > 0 else 1.5
-    hv_ga = h_home['FTAG'].mean() if len(h_home) > 0 else 1.2
-    hv_s = h_home['HS'].mean() if len(h_home) > 0 and 'HS' in h_home else 12.5
-    hv_sot = h_home['HST'].mean() if len(h_home) > 0 and 'HST' in h_home else 4.2
-    hv_c = h_home['HC'].mean() if len(h_home) > 0 and 'HC' in h_home else 5.5
+    # Venue stats via EMA (alpha=0.20)
+    h_home = df[(df['HomeTeam'] == h) & (df['Date'] < match_date)].sort_values('Date')
+    hv_gf = compute_ema(h_home['FTHG'].tolist(), alpha=0.20, default=1.5)
+    hv_ga = compute_ema(h_home['FTAG'].tolist(), alpha=0.20, default=1.2)
+    hv_s = compute_ema(h_home['HS'].tolist(), alpha=0.20, default=12.5) if 'HS' in h_home else 12.5
+    hv_sot = compute_ema(h_home['HST'].tolist(), alpha=0.20, default=4.2) if 'HST' in h_home else 4.2
+    hv_c = compute_ema(h_home['HC'].tolist(), alpha=0.20, default=5.5) if 'HC' in h_home else 5.5
     
-    a_away = df[(df['AwayTeam'] == a) & (df['Date'] < match_date)].sort_values('Date').tail(n_games)
-    av_gf = a_away['FTAG'].mean() if len(a_away) > 0 else 1.1
-    av_ga = a_away['FTHG'].mean() if len(a_away) > 0 else 1.6
-    av_s = a_away['AS'].mean() if len(a_away) > 0 and 'AS' in a_away else 9.5
-    av_sot = a_away['AST'].mean() if len(a_away) > 0 and 'AST' in a_away else 3.2
-    av_c = a_away['AC'].mean() if len(a_away) > 0 and 'AC' in a_away else 4.2
+    a_away = df[(df['AwayTeam'] == a) & (df['Date'] < match_date)].sort_values('Date')
+    av_gf = compute_ema(a_away['FTAG'].tolist(), alpha=0.20, default=1.1)
+    av_ga = compute_ema(a_away['FTHG'].tolist(), alpha=0.20, default=1.6)
+    av_s = compute_ema(a_away['AS'].tolist(), alpha=0.20, default=9.5) if 'AS' in a_away else 9.5
+    av_sot = compute_ema(a_away['AST'].tolist(), alpha=0.20, default=3.2) if 'AST' in a_away else 3.2
+    av_c = compute_ema(a_away['AC'].tolist(), alpha=0.20, default=4.2) if 'AC' in a_away else 4.2
     
-    # Overall form
-    h_all = h_matches.tail(n_games)
-    a_all = a_matches.tail(n_games)
+    # Overall tactical form via EMA (alpha=0.25)
+    h_gf_vals = [r['FTHG'] if r['HomeTeam'] == h else r['FTAG'] for _, r in h_matches.iterrows()]
+    h_ga_vals = [r['FTAG'] if r['HomeTeam'] == h else r['FTHG'] for _, r in h_matches.iterrows()]
+    h_sot_vals = [r['HST'] if r['HomeTeam'] == h else r['AST'] for _, r in h_matches.iterrows()]
+    h_s_vals = [r['HS'] if r['HomeTeam'] == h else r['AS'] for _, r in h_matches.iterrows()] if 'HS' in h_matches else []
+    h_opp_s_vals = [r['AS'] if r['HomeTeam'] == h else r['HS'] for _, r in h_matches.iterrows()] if 'AS' in h_matches else []
+    h_opp_sot_vals = [r['AST'] if r['HomeTeam'] == h else r['HST'] for _, r in h_matches.iterrows()] if 'AST' in h_matches else []
     
-    h_gf = h_all.apply(lambda r: r['FTHG'] if r['HomeTeam'] == h else r['FTAG'], axis=1).mean() if len(h_all) > 0 else 1.4
-    h_ga = h_all.apply(lambda r: r['FTAG'] if r['HomeTeam'] == h else r['FTHG'], axis=1).mean() if len(h_all) > 0 else 1.3
-    h_sot = h_all.apply(lambda r: r['HST'] if r['HomeTeam'] == h else r['AST'], axis=1).mean() if len(h_all) > 0 else 4.0
+    h_gf = compute_ema(h_gf_vals, alpha=0.25, default=1.4)
+    h_ga = compute_ema(h_ga_vals, alpha=0.25, default=1.3)
+    h_sot = compute_ema(h_sot_vals, alpha=0.25, default=4.0)
     
-    a_gf = a_all.apply(lambda r: r['FTAG'] if r['AwayTeam'] == a else r['FTHG'], axis=1).mean() if len(a_all) > 0 else 1.3
-    a_ga = a_all.apply(lambda r: r['FTHG'] if r['AwayTeam'] == a else r['FTAG'], axis=1).mean() if len(a_all) > 0 else 1.4
-    a_sot = a_all.apply(lambda r: r['AST'] if r['AwayTeam'] == a else r['HST'], axis=1).mean() if len(a_all) > 0 else 3.8
+    a_gf_vals = [r['FTAG'] if r['AwayTeam'] == a else r['FTHG'] for _, r in a_matches.iterrows()]
+    a_ga_vals = [r['FTHG'] if r['AwayTeam'] == a else r['FTAG'] for _, r in a_matches.iterrows()]
+    a_sot_vals = [r['AST'] if r['AwayTeam'] == a else r['HST'] for _, r in a_matches.iterrows()]
+    a_s_vals = [r['AS'] if r['AwayTeam'] == a else r['HS'] for _, r in a_matches.iterrows()] if 'AS' in a_matches else []
+    a_opp_s_vals = [r['HS'] if r['AwayTeam'] == a else r['AS'] for _, r in a_matches.iterrows()] if 'HS' in a_matches else []
+    a_opp_sot_vals = [r['HST'] if r['AwayTeam'] == a else r['AST'] for _, r in a_matches.iterrows()] if 'HST' in a_matches else []
     
-    # Synthetic xG & Shot Quality
-    if len(h_all) > 0 and 'HS' in h_all.columns:
-        h_s_tot = h_all.apply(lambda r: r['HS'] if r['HomeTeam'] == h else r['AS'], axis=1).sum()
-        h_sot_tot = h_all.apply(lambda r: r['HST'] if r['HomeTeam'] == h else r['AST'], axis=1).sum()
-        h_gf_tot = h_all.apply(lambda r: r['FTHG'] if r['HomeTeam'] == h else r['FTAG'], axis=1).sum()
-        h_opp_s = h_all.apply(lambda r: r['AS'] if r['HomeTeam'] == h else r['HS'], axis=1).sum()
-        h_opp_sot = h_all.apply(lambda r: r['AST'] if r['HomeTeam'] == h else r['HST'], axis=1).sum()
-        h_acc = h_sot_tot / max(1.0, h_s_tot)
-        h_conv = h_gf_tot / max(1.0, h_sot_tot)
-        h_supp = h_opp_sot / max(1.0, h_opp_s)
+    a_gf = compute_ema(a_gf_vals, alpha=0.25, default=1.3)
+    a_ga = compute_ema(a_ga_vals, alpha=0.25, default=1.4)
+    a_sot = compute_ema(a_sot_vals, alpha=0.25, default=3.8)
+    
+    # Synthetic xG & Shot Quality via EMA
+    h_tot_s = compute_ema(h_s_vals, alpha=0.15, default=11.0)
+    h_tot_sot = compute_ema(h_sot_vals, alpha=0.15, default=4.0)
+    h_tot_gf = compute_ema(h_gf_vals, alpha=0.15, default=1.4)
+    h_opp_s = compute_ema(h_opp_s_vals, alpha=0.15, default=11.0)
+    h_opp_sot = compute_ema(h_opp_sot_vals, alpha=0.15, default=4.0)
+    
+    a_tot_s = compute_ema(a_s_vals, alpha=0.15, default=10.0)
+    a_tot_sot = compute_ema(a_sot_vals, alpha=0.15, default=3.5)
+    a_tot_gf = compute_ema(a_gf_vals, alpha=0.15, default=1.2)
+    a_opp_s = compute_ema(a_opp_s_vals, alpha=0.15, default=11.0)
+    a_opp_sot = compute_ema(a_opp_sot_vals, alpha=0.15, default=4.0)
+    
+    h_acc = h_tot_sot / max(1.0, h_tot_s)
+    h_conv = h_tot_gf / max(1.0, h_tot_sot)
+    h_supp = h_opp_sot / max(1.0, h_opp_s)
+    
+    a_acc = a_tot_sot / max(1.0, a_tot_s)
+    a_conv = a_tot_gf / max(1.0, a_tot_sot)
+    a_supp = a_opp_sot / max(1.0, a_opp_s)
+    
+    # Synthetic xG differential
+    h_xg = hv_s * h_acc * h_conv * (a_supp / 0.33)
+    a_xg = av_s * a_acc * a_conv * (h_supp / 0.33)
+    xg_diff = round(h_xg - a_xg, 2)
+    
+    # Head-to-head historical matchup dominance
+    h2h_past = df[(((df['HomeTeam'] == h) & (df['AwayTeam'] == a)) | ((df['HomeTeam'] == a) & (df['AwayTeam'] == h))) & (df['Date'] < match_date)].sort_values('Date')
+    if len(h2h_past) > 0:
+        h2h_diffs = [
+            (float(r['FTHG']) - float(r['FTAG'])) if r['HomeTeam'] == h else (float(r['FTAG']) - float(r['FTHG']))
+            for _, r in h2h_past.iterrows()
+        ]
+        h2h_dom = compute_ema(h2h_diffs, alpha=0.35, default=0.0)
     else:
-        h_acc, h_conv, h_supp = 0.33, 0.30, 0.33
-        
-    if len(a_all) > 0 and 'AS' in a_all.columns:
-        a_s_tot = a_all.apply(lambda r: r['AS'] if r['AwayTeam'] == a else r['HS'], axis=1).sum()
-        a_sot_tot = a_all.apply(lambda r: r['AST'] if r['AwayTeam'] == a else r['HST'], axis=1).sum()
-        a_gf_tot = a_all.apply(lambda r: r['FTAG'] if r['AwayTeam'] == a else r['FTHG'], axis=1).sum()
-        a_opp_s = a_all.apply(lambda r: r['HS'] if r['AwayTeam'] == a else r['AS'], axis=1).sum()
-        a_opp_sot = a_all.apply(lambda r: r['HST'] if r['AwayTeam'] == a else r['AST'], axis=1).sum()
-        a_acc = a_sot_tot / max(1.0, a_s_tot)
-        a_conv = a_gf_tot / max(1.0, a_sot_tot)
-        a_supp = a_opp_sot / max(1.0, a_opp_s)
-    else:
-        a_acc, a_conv, a_supp = 0.33, 0.30, 0.33
+        h2h_dom = 0.0
         
     return {
         'Home_Elo': r_h, 'Away_Elo': r_a, 'Elo_Diff': elo_diff,
@@ -563,7 +770,9 @@ def get_live_match_features(df, elo_tracker, home_team, away_team, match_date=No
         'Home_Goal_Conv': round(h_conv, 3), 'Away_Goal_Conv': round(a_conv, 3),
         'Home_Def_Suppression': round(h_supp, 3), 'Away_Def_Suppression': round(a_supp, 3),
         'Home_Card_Stress': 1.8, 'Away_Card_Stress': 1.8,
-        'Home_2H_Momentum': 0.55, 'Away_2H_Momentum': 0.55
+        'Home_2H_Momentum': 0.55, 'Away_2H_Momentum': 0.55,
+        'Expected_Goals_Diff': xg_diff,
+        'H2H_Dominance': round(h2h_dom, 2)
     }
 
 
@@ -633,36 +842,51 @@ def get_market_probabilities(lambda_h, lambda_a, rho=-0.13):
 
 # --- 6. SAFE PRODUCTION STAKING & LONGSHOT FILTERING ---
 
-def calculate_kelly(prob, odds, bankroll=1000, fraction=0.10, max_stake_pct=0.025, shrinkage=0.30, min_prob=0.20, max_odds=4.00):
+def calculate_kelly(prob, odds, bankroll=1000, fraction=KELLY_FRACTION, max_stake_pct=MAX_STAKE_PCT,
+                    min_odds=MIN_ODDS, max_odds=MAX_ODDS, min_edge=MIN_EDGE,
+                    max_divergence=MAX_DIVERGENCE, drawdown_factor=1.0,
+                    fair_market_prob=None, max_draw_risk=MAX_DRAW_RISK, draw_prob=None,
+                    is_dnb=False, concurrent_bets=1, **kwargs):
     """
-    Calculates disciplined bet size with Favorite-Longshot bias guards:
-    1. Rejects extreme longshots (odds > max_odds or probability < min_prob) where bookmaker vig is highest.
-    2. Uses probability shrinkage towards market implied probability.
-    3. Requires a minimum post-shrinkage edge of +3.0%.
-    4. Applies conservative Tenth-Kelly with a hard 2.5% max bankroll cap.
+    Calculates disciplined bet size with Tier 1/2 quantitative parameters:
+    1. Rejects toxic odds outside profitable band [min_odds, max_odds] (default [1.90, 2.80] for 1X2, [1.40, 2.80] for DNB).
+    2. Requires a minimum edge of min_edge (default +3.0%).
+    3. Adverse selection filter: Rejects if divergence > max_divergence (default 10%).
+    4. Draw risk protection: Rejects 1X2 bets when match draw probability > max_draw_risk (default 28%).
+       Ignored for DNB because draws result in stake refund (push).
+    5. Computes clean Tenth-Kelly sizing with drawdown circuit breaker.
+    6. Applies simultaneous concurrent bet dampener: stake * (1 / sqrt(concurrent_bets)).
+    7. Capped at max_stake_pct (default 2.5% of bankroll).
     """
-    if odds <= 1.02 or prob <= 0.0:
+    effective_min_odds = 1.40 if is_dnb else min_odds
+    if odds < effective_min_odds or odds > max_odds or prob <= 0.0:
         return 0.0
         
-    # Longshot & Draw Filter: Avoid low probability high-vig bets
-    if odds > max_odds or prob < min_prob:
-        return 0.0
-        
-    market_prob = 1.0 / odds
-    shrunk_prob = (1.0 - shrinkage) * prob + shrinkage * market_prob
+    benchmark_prob = fair_market_prob if (fair_market_prob is not None and fair_market_prob > 0) else (1.0 / odds)
     
-    edge = shrunk_prob - market_prob
-    if edge < 0.03:  # Disciplined 3% minimum edge required post-shrinkage
+    # Adverse selection protection: If model disagrees massively with market, market likely has injury/lineup news
+    if max_divergence is not None and round(abs(prob - benchmark_prob), 6) > max_divergence:
+        return 0.0
+        
+    # Draw risk protection: High draw volatility causes catastrophic losses on 1X2 match betting.
+    # For DNB bets, draw pushes/refunds stake, so max_draw_risk filter is bypassed.
+    if not is_dnb and max_draw_risk is not None and draw_prob is not None and draw_prob > max_draw_risk:
+        return 0.0
+        
+    edge = prob - benchmark_prob
+    if edge < min_edge:
         return 0.0
         
     b = odds - 1.0
-    q = 1.0 - shrunk_prob
-    f_star = (b * shrunk_prob - q) / b
+    q = 1.0 - prob
+    f_star = (b * prob - q) / b
     
     if f_star <= 0.0:
         return 0.0
         
-    suggested_stake = f_star * fraction * bankroll
+    # Simultaneous portfolio dampener for concurrent matches
+    concurrent_dampener = 1.0 / math.sqrt(max(1, concurrent_bets))
+    suggested_stake = f_star * fraction * drawdown_factor * concurrent_dampener * bankroll
     max_stake = bankroll * max_stake_pct
     return round(float(min(suggested_stake, max_stake)), 2)
 

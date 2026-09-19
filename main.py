@@ -8,7 +8,10 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, log_loss, b
 from utils import (
     fetch_historical_data, fetch_market_odds, calculate_kelly, 
     normalize_team, add_pre_match_features, get_live_match_features,
-    get_market_probabilities, log_prediction, devig_odds_power, MODEL_CACHE
+    get_market_probabilities, log_prediction, devig_odds_power, MODEL_CACHE,
+    compute_dnb_probs, compute_dnb_odds, get_adaptive_market_weight,
+    MARKET_PRIOR_WEIGHT, MAX_DIVERGENCE, MIN_ODDS, MAX_ODDS, MIN_EDGE,
+    MAX_DRAW_RISK, KELLY_FRACTION, MAX_STAKE_PCT
 )
 
 def evaluate_brier_multiclass(y_true, y_probs):
@@ -18,6 +21,22 @@ def evaluate_brier_multiclass(y_true, y_probs):
     for i, val in enumerate(y_true):
         y_one_hot[i, int(val)] = 1.0
     return float(np.mean(np.sum((y_probs - y_one_hot) ** 2, axis=1)))
+
+def expected_calibration_error(y_true, y_probs, n_bins=10):
+    """Calculates multi-class Expected Calibration Error (ECE) (Flaw E Fix)."""
+    bin_boundaries = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    total_samples = len(y_true)
+    for c in range(y_probs.shape[1]):
+        y_c = (np.array(y_true) == c).astype(float)
+        p_c = y_probs[:, c]
+        for i in range(n_bins):
+            mask = (p_c >= bin_boundaries[i]) & (p_c < bin_boundaries[i+1])
+            if mask.sum() > 0:
+                bin_acc = y_c[mask].mean()
+                bin_conf = p_c[mask].mean()
+                ece += mask.sum() * abs(bin_acc - bin_conf)
+    return float(ece / (total_samples * y_probs.shape[1]))
 
 def compute_fair_market_probs(row):
     """Converts 1X2 decimal odds into power de-vigged implied probabilities."""
@@ -42,10 +61,10 @@ def main(force_retrain=False):
         print("Error: Could not retrieve match dataset.")
         return
         
-    print("Pre-computing dynamic Elo, venue splits, and Synthetic xG metrics...")
+    print("Pre-computing dynamic Elo, venue splits, Dual-Horizon EMAs & Synthetic xG metrics...")
     df, elo_tracker = add_pre_match_features(df)
     
-    # 2. Comprehensive Production Feature Set (Tactics, Shot Quality & Momentum)
+    # 2. Comprehensive Production Feature Set (Tactics, Shot Quality, Momentum & xG/H2H)
     features_clf = [
         'Home_Elo', 'Away_Elo', 'Elo_Diff',
         'Home_Rest_Days', 'Away_Rest_Days',
@@ -57,7 +76,8 @@ def main(force_retrain=False):
         'Home_Goal_Conv', 'Away_Goal_Conv',
         'Home_Def_Suppression', 'Away_Def_Suppression',
         'Home_Card_Stress', 'Away_Card_Stress',
-        'Home_2H_Momentum', 'Away_2H_Momentum'
+        'Home_2H_Momentum', 'Away_2H_Momentum',
+        'Expected_Goals_Diff', 'H2H_Dominance'
     ]
     
     features_h = [
@@ -66,7 +86,8 @@ def main(force_retrain=False):
         'Home_V_Shots', 'Away_V_Shots',
         'Home_V_SOT', 'Away_V_SOT',
         'Home_Shot_Acc', 'Home_Goal_Conv', 'Away_Def_Suppression',
-        'Home_V_Corners', 'Away_V_Corners'
+        'Home_V_Corners', 'Away_V_Corners',
+        'Expected_Goals_Diff', 'H2H_Dominance'
     ]
     
     features_a = [
@@ -75,7 +96,8 @@ def main(force_retrain=False):
         'Away_V_Shots', 'Home_V_Shots',
         'Away_V_SOT', 'Home_V_SOT',
         'Away_Shot_Acc', 'Away_Goal_Conv', 'Home_Def_Suppression',
-        'Away_V_Corners', 'Home_V_Corners'
+        'Away_V_Corners', 'Home_V_Corners',
+        'Expected_Goals_Diff', 'H2H_Dominance'
     ]
     
     # 3. Chronological Train/Validation Split (Train <= 24/25, Validate on 25/26)
@@ -168,11 +190,16 @@ def main(force_retrain=False):
             y_sub = y_val_clf.values[valid_indices]
             market_logloss = log_loss(y_sub, m_probs_arr)
             market_brier = evaluate_brier_multiclass(y_sub, m_probs_arr)
+            val_ece = expected_calibration_error(y_val_clf.values, val_probs)
+            market_ece = expected_calibration_error(y_sub, m_probs_arr)
             print(f"{market_logloss:<18.4f}")
             print(f"{'Brier Score (0=Perfect)':<25} | {model_brier:<15.4f} | {naive_brier:<15.4f} | {market_brier:<18.4f}")
+            print(f"{'Expected Calib Error (ECE)':<25} | {val_ece:<15.4f} | {'N/A':<15} | {market_ece:<18.4f}")
         else:
             print(f"{'N/A':<18}")
+            val_ece = expected_calibration_error(y_val_clf.values, val_probs)
             print(f"{'Brier Score (0=Perfect)':<25} | {model_brier:<15.4f} | {naive_brier:<15.4f} | {'N/A':<18}")
+            print(f"{'Expected Calib Error (ECE)':<25} | {val_ece:<15.4f} | {'N/A':<15} | {'N/A':<18}")
             
         preds_h = model_h.predict(X_val_h)
         preds_a = model_a.predict(X_val_a)
@@ -281,34 +308,62 @@ def main(force_retrain=False):
         else:
             fair_1x2 = [1.0/3.0, 1.0/3.0, 1.0/3.0]
 
+        adaptive_weight = get_adaptive_market_weight(
+            match_date=game.get('commence_time'),
+            home_team=home,
+            away_team=away,
+            base_weight=MARKET_PRIOR_WEIGHT
+        )
+        
+        # Draw No Bet synthetic odds and probabilities
+        p_h_dnb, p_a_dnb = compute_dnb_probs(probs_1x2=[probs['H'], probs['D'], probs['A']])
+        fair_h_dnb, fair_a_dnb = compute_dnb_probs(fair_1x2)
+        dnb_h_odds, dnb_a_odds = compute_dnb_odds(best_odds['H'], best_odds['D'], best_odds['A'])
+        
+        best_odds['H_DNB'] = dnb_h_odds
+        best_odds['A_DNB'] = dnb_a_odds
+        best_bookie['H_DNB'] = best_bookie['H']
+        best_bookie['A_DNB'] = best_bookie['A']
+
         eval_markets = [
-            ('H2H', 'H', probs['H'], f"{home} Win", fair_1x2[0], True),
-            ('H2H', 'D', probs['D'], "Draw", fair_1x2[1], True),
-            ('H2H', 'A', probs['A'], f"{away} Win", fair_1x2[2], True),
-            ('Totals', 'Over2.5', probs['Over2.5'], "Over 2.5", 1.0/max(1.01, best_odds['Over2.5']), False),
-            ('Totals', 'Under2.5', probs['Under2.5'], "Under 2.5", 1.0/max(1.01, best_odds['Under2.5']), False),
-            ('BTTS', 'BTTS_Yes', probs['BTTS_Yes'], "BTTS Yes", 1.0/max(1.01, best_odds['BTTS_Yes']), False),
-            ('BTTS', 'BTTS_No', probs['BTTS_No'], "BTTS No", 1.0/max(1.01, best_odds['BTTS_No']), False),
+            ('H2H', 'H', probs['H'], f"{home} Win", fair_1x2[0], True, False),
+            ('H2H', 'D', probs['D'], "Draw", fair_1x2[1], True, False),
+            ('H2H', 'A', probs['A'], f"{away} Win", fair_1x2[2], True, False),
+            ('DNB', 'H_DNB', p_h_dnb, f"{home} DNB", fair_h_dnb, False, True),
+            ('DNB', 'A_DNB', p_a_dnb, f"{away} DNB", fair_a_dnb, False, True),
         ]
         
         matchup_label = f"{home} vs {away}"
         match_has_edge = False
+        p_draw = fair_1x2[1]
         
-        for m_cat, key, model_p, sel_name, fair_mkt_p, is_1x2 in eval_markets:
+        for m_cat, key, model_p, sel_name, fair_mkt_p, is_1x2, is_dnb in eval_markets:
             odds = best_odds[key]
-            if odds <= 1.01:
+            if odds < MIN_ODDS or odds > MAX_ODDS:
                 continue
                 
-            # Use de-vigged market baseline
-            stake = calculate_kelly(
-                prob=model_p, odds=odds, bankroll=bankroll,
-                fraction=0.10, max_stake_pct=0.025, shrinkage=0.30,
-                min_prob=0.20 if is_1x2 else 0.40,
-                max_odds=3.80 if is_1x2 else 2.50
-            )
-            
-            shrunk_p = 0.70 * model_p + 0.30 * fair_mkt_p
+            # Shrunk probability using adaptive Empirical Bayes market anchor
+            shrunk_p = adaptive_weight * fair_mkt_p + (1.0 - adaptive_weight) * model_p
             edge = shrunk_p - fair_mkt_p
+            
+            # Adverse selection protection
+            if abs(model_p - fair_mkt_p) > MAX_DIVERGENCE:
+                continue
+                
+            # Draw risk protection for match winner bets (DNB bypasses this as draws push)
+            if is_1x2 and MAX_DRAW_RISK is not None and p_draw > MAX_DRAW_RISK:
+                continue
+            
+            stake = calculate_kelly(
+                prob=shrunk_p, odds=odds, bankroll=bankroll,
+                fraction=KELLY_FRACTION, max_stake_pct=MAX_STAKE_PCT,
+                min_odds=MIN_ODDS, max_odds=MAX_ODDS, min_edge=MIN_EDGE,
+                max_divergence=MAX_DIVERGENCE,
+                fair_market_prob=fair_mkt_p,
+                max_draw_risk=MAX_DRAW_RISK,
+                draw_prob=p_draw,
+                is_dnb=is_dnb
+            )
             
             if stake > 0.0:
                 match_has_edge = True
