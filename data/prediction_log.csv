@@ -1,81 +1,20 @@
-Timestamp,Home,Away,Model_H_Prob,Model_D_Prob,Model_A_Prob,Market_H_Odds,Market_D_Odds,Market_A_Odds,Bookmaker,Outcome
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.6,2.62,Coral,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.6,2.65,Unibet (UK),A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.5,2.62,Ladbrokes,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.5,2.62,Paddy Power,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.45,3.4,2.62,888sport,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.45,3.4,2.62,William Hill,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.6,3.4,2.62,Betway,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.62,3.75,2.8,Betfair,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.62,3.75,2.78,Smarkets,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.4,3.6,2.62,BoyleSports,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.5,2.7,Bet Victor,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.6,2.65,Grosvenor,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.45,3.55,2.6,LiveScore Bet,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.48,3.6,2.63,LeoVegas,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.5,3.6,2.65,Casumo,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.45,3.55,2.6,Virgin Bet,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.62,3.75,2.8,Matchbook,A
-2026-03-03 13:53,Bournemouth,Brentford,0.934,0.056,0.01,2.4,3.1,2.4,Betfair Sportsbook,A
-2026-03-03 13:53,Everton,Burnley,0.597,0.272,0.131,1.62,4.1,6.8,Betfair,H
-2026-03-03 13:53,Everton,Burnley,0.597,0.272,0.131,1.6,4.1,6.8,Smarkets,H
-2026-03-03 13:53,Everton,Burnley,0.597,0.272,0.131,1.62,4.1,7.0,Matchbook,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.62,3.5,2.5,Paddy Power,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.62,3.6,2.5,Coral,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.62,3.5,2.4,888sport,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.62,3.5,2.4,William Hill,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.6,3.6,2.5,Ladbrokes,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.7,3.6,2.5,Unibet (UK),H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.84,3.65,2.62,Betfair,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.7,3.6,2.4,Betway,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.6,3.6,2.4,BoyleSports,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.82,3.65,2.6,Smarkets,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.7,3.65,2.38,LeoVegas,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.75,3.7,2.4,Casumo,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.65,3.6,2.35,Virgin Bet,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.75,3.7,2.4,Grosvenor,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.6,3.55,2.33,LiveScore Bet,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.7,3.6,2.45,Bet Victor,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.5,3.1,2.38,Betfair Sportsbook,H
-2026-03-03 13:53,Aston Villa,Chelsea,0.778,0.176,0.046,2.84,3.65,2.62,Matchbook,H
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.6,3.6,1.98,Unibet (UK),D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.6,3.75,1.95,Paddy Power,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.5,3.5,1.95,888sport,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.5,3.5,1.95,William Hill,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.5,3.5,1.95,Betway,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.6,3.6,1.93,Bet Victor,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.6,3.65,1.95,Smarkets,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.65,3.7,1.95,Grosvenor,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.5,3.5,1.86,Virgin Bet,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.5,3.5,1.86,LiveScore Bet,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.65,3.65,1.93,LeoVegas,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.65,3.7,1.95,Casumo,D
-2026-03-03 13:53,Burnley,Bournemouth,0.248,0.62,0.131,3.6,3.5,1.95,BoyleSports,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.27,5.5,11.0,Unibet (UK),D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.22,5.5,13.0,Paddy Power,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.25,5.0,12.0,888sport,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.25,5.0,12.0,William Hill,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.29,6.2,13.0,Betfair,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.22,5.7,13.0,Smarkets,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.25,5.25,11.0,Betway,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.23,5.6,14.0,LeoVegas,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.24,5.75,14.0,Casumo,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.24,5.75,14.0,Grosvenor,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.22,5.5,13.0,Bet Victor,D
-2026-03-03 13:53,Arsenal,Everton,0.924,0.029,0.048,1.22,5.0,13.0,BoyleSports,D
-2026-03-03 14:19,MANUAL,Leeds,Sunderland,0.741,0.212,0.048,1.89,Manual,PENDING,
-2026-05-24 05:51,MANUAL,Arsenal,Chelsea,0.847,0.003,0.15,1.8,Manual,PENDING,
-2026-05-24 16:42,MANUAL,Arsenal,Chelsea,0.341,0.265,0.394,1.8,Manual,PENDING,
-2026-05-24 21:02,MANUAL,Arsenal,Chelsea,0.976,0.011,0.012,2.0,Manual,PENDING,
-2026-05-24 21:04,MANUAL,Arsenal,Chelsea,0.536,0.25,0.214,2.0,Manual,PENDING,
-2026-09-18 16:52,2026-10-10T14:00:00Z,Aston Villa,Brentford,H2H,Aston Villa Win,0.527,2.48,+9.7%,Grosvenor,13.79,PENDING,0.0,PENDING,0.0
-2026-09-18 16:52,2026-10-10T14:00:00Z,Ipswich,Fulham,H2H,Fulham Win,0.576,2.62,+13.7%,Betfair,21.89,PENDING,0.0,PENDING,0.0
-2026-09-18 17:00,2026-10-10T14:00:00Z,Aston Villa,Brentford,H2H,Aston Villa Win,0.524,2.48,+9.5%,Grosvenor,13.44,PENDING,0.0,PENDING,0.0
-2026-09-18 17:00,2026-10-10T14:00:00Z,Ipswich,Fulham,H2H,Fulham Win,0.556,2.62,+12.3%,Betfair,19.62,PENDING,0.0,PENDING,0.0
-2026-09-19 00:08,2026-10-10T14:00:00Z,Aston Villa,Brentford,H2H,Aston Villa Win,0.515,2.48,+8.9%,Grosvenor,12.33,PENDING,0.0,PENDING,0.0
-2026-09-19 00:08,2026-10-10T14:00:00Z,Ipswich,Fulham,H2H,Fulham Win,0.548,2.62,+11.8%,Betfair,18.7,PENDING,0.0,PENDING,0.0
-2026-09-19 00:08,MANUAL,Arsenal,Chelsea,H2H,Arsenal Win,0.586,2.05,+11.2%,Manual,19.23,PENDING,0.0,PENDING,0.0
-2026-09-20 00:57,MANUAL,Arsenal,Chelsea,1X2,Arsenal Win,0.551,1.95,+5.4%,Manual,7.85,PENDING,0.0,PENDING,0.0
-2026-09-20 00:57,MANUAL,Arsenal,Chelsea,DNB,Arsenal DNB,0.727,1.41,+5.3%,Manual,5.66,PENDING,0.0,PENDING,0.0
-2026-09-20 00:57,MANUAL,Arsenal,Chelsea,1X2,Arsenal Win,0.551,1.95,+5.4%,Manual,7.85,PENDING,0.0,PENDING,0.0
-2026-09-20 00:57,MANUAL,Arsenal,Chelsea,DNB,Arsenal DNB,0.727,1.41,+5.3%,Manual,5.66,PENDING,0.0,PENDING,0.0
+Timestamp,Kickoff,Home,Away,Market,Selection,Model_Prob,Market_Odds,Edge,Bookmaker,Stake,Outcome,Closing_Odds,CLV,PnL
+2026-09-18 16:52,2026-10-10T14:00:00Z,Aston Villa,Brentford,1X2,Aston Villa Win,0.527,2.48,+9.7%,Grosvenor,13.79,PENDING,0.0,PENDING,0.0
+2026-09-18 16:52,2026-10-10T14:00:00Z,Ipswich,Fulham,1X2,Fulham Win,0.576,2.62,+13.7%,Betfair,21.89,PENDING,0.0,PENDING,0.0
+2026-09-18 17:00,2026-10-10T14:00:00Z,Aston Villa,Brentford,1X2,Aston Villa Win,0.524,2.48,+9.5%,Grosvenor,13.44,PENDING,0.0,PENDING,0.0
+2026-09-18 17:00,2026-10-10T14:00:00Z,Ipswich,Fulham,1X2,Fulham Win,0.556,2.62,+12.3%,Betfair,19.62,PENDING,0.0,PENDING,0.0
+2026-09-19 00:08,2026-10-10T14:00:00Z,Aston Villa,Brentford,1X2,Aston Villa Win,0.515,2.48,+8.9%,Grosvenor,12.33,PENDING,0.0,PENDING,0.0
+2026-09-19 00:08,2026-10-10T14:00:00Z,Ipswich,Fulham,1X2,Fulham Win,0.548,2.62,+11.8%,Betfair,18.7,PENDING,0.0,PENDING,0.0
+2026-09-19 00:08,2026-09-19,Arsenal,Chelsea,1X2,Arsenal Win,0.586,2.05,+11.2%,Manual,19.23,PENDING,0.0,PENDING,0.0
+2026-09-20 00:57,2026-09-20,Arsenal,Chelsea,1X2,Arsenal Win,0.551,1.95,+5.4%,Manual,7.85,PENDING,0.0,PENDING,0.0
+2026-09-20 00:57,2026-09-20,Arsenal,Chelsea,DNB,Arsenal DNB,0.727,1.41,+5.3%,Manual,5.66,PENDING,0.0,PENDING,0.0
+2026-09-20 00:57,2026-09-20,Arsenal,Chelsea,1X2,Arsenal Win,0.551,1.95,+5.4%,Manual,7.85,PENDING,0.0,PENDING,0.0
+2026-09-20 00:57,2026-09-20,Arsenal,Chelsea,DNB,Arsenal DNB,0.727,1.41,+5.3%,Manual,5.66,PENDING,0.0,PENDING,0.0
+2026-09-20 03:19,2026-10-11T13:00:00Z,Crystal Palace,Nott'm Forest,DNB,Nott'm Forest DNB,0.57,1.98,+3.2%,Betfair,4.22,PENDING,0.0,PENDING,0.0
+2026-09-20 03:19,2026-10-12T19:00:00Z,Coventry City,Newcastle,DNB,Coventry City DNB,0.457,2.58,+3.4%,Betfair,3.95,PENDING,0.0,PENDING,0.0
+2026-09-20 03:19,2026-10-17T16:30:00Z,Newcastle,Aston Villa,DNB,Aston Villa DNB,0.487,2.4,+4.4%,Betfred (UK),2.39,PENDING,0.0,PENDING,0.0
+2026-09-20 03:20,2026-10-11T13:00:00Z,Crystal Palace,Nott'm Forest,DNB,Nott'm Forest DNB,0.587,1.98,+4.0%,Betfair,5.68,PENDING,0.0,PENDING,0.0
+2026-09-20 03:20,2026-10-17T16:30:00Z,Newcastle,Aston Villa,DNB,Aston Villa DNB,0.476,2.4,+3.9%,Betfred (UK),1.55,PENDING,0.0,PENDING,0.0
+2026-09-20 14:21,2026-09-20,Bournemouth,Liverpool,DNB,Bournemouth DNB,0.466,2.35,+5.5%,Manual,6.93,PENDING,0.0,PENDING,0.0
+2026-09-20 14:39,2026-09-20,Arsenal,Chelsea,1X2,Arsenal Win,0.552,1.95,+5.4%,Bet365,7.97,PENDING,0.0,PENDING,0.0
+2026-09-20 14:39,2026-09-20,Arsenal,Chelsea,DNB,Arsenal DNB,0.727,1.41,+5.3%,Bet365,5.63,PENDING,0.0,PENDING,0.0

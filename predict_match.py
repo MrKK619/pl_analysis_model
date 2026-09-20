@@ -51,6 +51,9 @@ def individual_prediction():
     print("\n--- 1. Matchup Input ---")
     home_raw = input("Enter Home Team: ").strip()
     away_raw = input("Enter Away Team: ").strip()
+    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+    match_date_raw = input(f"Enter Match Date (YYYY-MM-DD, default: {today_str}): ").strip()
+    match_date = match_date_raw if match_date_raw else today_str
     
     home_in = normalize_team(home_raw)
     away_in = normalize_team(away_raw)
@@ -67,6 +70,8 @@ def individual_prediction():
 
     # 2. Market Odds Input
     print("\n--- 2. Bookmaker Odds Input (Decimal Format e.g. 2.10, 3.40) ---")
+    bookie_raw = input("Enter Bookmaker Name (default: Manual): ").strip()
+    bookie_name = bookie_raw if bookie_raw else "Manual"
     try:
         h_odds = float(input(f"Decimal Odds for {home_in} Win: "))
         d_odds = float(input(f"Decimal Odds for Draw: "))
@@ -94,7 +99,7 @@ def individual_prediction():
     
     # Adaptive Empirical Bayes Posterior Probability
     adaptive_weight = get_adaptive_market_weight(
-        match_date=None,
+        match_date=match_date,
         home_team=home_in,
         away_team=away_in,
         base_weight=MARKET_PRIOR_WEIGHT
@@ -193,7 +198,7 @@ def individual_prediction():
             log_prediction(
                 home=home_in, away=away_in, market=m_cat, selection=label,
                 model_prob=model_p, market_odds=odds, edge=edge,
-                bookie="Manual", stake=stake, kickoff="MANUAL"
+                bookie=bookie_name, stake=stake, kickoff=match_date
             )
             print(f"[OK] Logged bet opportunity: {label} to data/prediction_log.csv")
 

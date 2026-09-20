@@ -309,11 +309,17 @@ def get_adaptive_market_weight(match_date, season_start_date=None, home_team=Non
         if pd.isna(match_dt):
             match_dt = pd.Timestamp.now()
             
+    # Strip timezone to ensure consistent tz-naive datetime subtraction
+    if getattr(match_dt, 'tzinfo', None) is not None:
+        match_dt = match_dt.tz_localize(None)
+            
     if season_start_date is None:
         year = int(match_dt.year if match_dt.month >= 8 else match_dt.year - 1)
         season_start_date = pd.Timestamp(year=year, month=8, day=12)
     else:
         season_start_date = pd.to_datetime(season_start_date)
+        if getattr(season_start_date, 'tzinfo', None) is not None:
+            season_start_date = season_start_date.tz_localize(None)
         
     days_into_season = max(0, (match_dt - season_start_date).days)
     
@@ -909,9 +915,10 @@ def fetch_market_odds():
     except Exception:
         return []
 
-def log_prediction(home, away, market, selection, model_prob, market_odds, edge, bookie, stake=0.0, kickoff="MANUAL", closing_odds=None):
+def log_prediction(home, away, market, selection, model_prob, market_odds, edge, bookie="Manual", stake=0.0, kickoff=None, closing_odds=None):
     """
     Appends predictions to CSV with a complete schema supporting Closing Line Value (CLV).
+    Ensures column alignment and format parity between automated scanner and manual predictions.
     """
     os.makedirs('data', exist_ok=True)
     
@@ -920,19 +927,29 @@ def log_prediction(home, away, market, selection, model_prob, market_odds, edge,
         'Model_Prob', 'Market_Odds', 'Edge', 'Bookmaker', 'Stake', 'Outcome', 'Closing_Odds', 'CLV', 'PnL'
     ]
     
+    # Standardize market names (e.g. H2H -> 1X2)
+    mkt_standard = '1X2' if str(market).upper() == 'H2H' else str(market).upper()
+    
+    # Standardize kickoff date/time (default to current date if not provided or placeholder)
+    if kickoff is None or str(kickoff).strip().upper() in ('MANUAL', 'UPCOMING', ''):
+        kickoff_val = datetime.now().strftime("%Y-%m-%d")
+    else:
+        kickoff_val = str(kickoff)
+        
+    edge_str = f"{edge:+.1%}" if isinstance(edge, (int, float)) else str(edge)
     clv_val = round((market_odds / closing_odds - 1.0) * 100.0, 2) if (closing_odds and closing_odds > 1.0) else 0.0
     
     entry = {
         'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M"),
-        'Kickoff': kickoff,
+        'Kickoff': kickoff_val,
         'Home': normalize_team(home),
         'Away': normalize_team(away),
-        'Market': market,
+        'Market': mkt_standard,
         'Selection': selection,
         'Model_Prob': round(float(model_prob), 3),
         'Market_Odds': round(float(market_odds), 2),
-        'Edge': f"{edge:+.1%}",
-        'Bookmaker': bookie,
+        'Edge': edge_str,
+        'Bookmaker': bookie if bookie else "Manual",
         'Stake': round(float(stake), 2),
         'Outcome': 'PENDING',
         'Closing_Odds': round(float(closing_odds), 2) if closing_odds else 0.0,
@@ -941,7 +958,15 @@ def log_prediction(home, away, market, selection, model_prob, market_odds, edge,
     }
     
     df = pd.DataFrame([entry], columns=headers)
-    write_header = not os.path.exists(LOG_FILE) or os.path.getsize(LOG_FILE) == 0
+    write_header = True
+    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
+        try:
+            with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+            if first_line == ','.join(headers):
+                write_header = False
+        except Exception:
+            pass
     
     try:
         df.to_csv(LOG_FILE, mode='a', index=False, header=write_header)

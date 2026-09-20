@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import pandas as pd
 import sys
 import os
 
@@ -161,7 +162,7 @@ def test_logit_space_bayesian_blending():
     assert np.allclose(neutral_blend, mkt, atol=1e-3)
 
 def test_adaptive_shrinkage_seasonality():
-    """Verify early season uses higher market weight than late season."""
+    """Verify early season uses higher market weight than late season and handles tz-aware dates."""
     early_date = "2024-08-20"
     late_date = "2025-03-15"
     w_early = get_adaptive_market_weight(early_date)
@@ -171,6 +172,11 @@ def test_adaptive_shrinkage_seasonality():
     # Promoted team penalty
     w_promoted = get_adaptive_market_weight(early_date, home_team="Ipswich", away_team="Arsenal")
     assert w_promoted >= w_early
+
+    # Timezone-aware date string (e.g. from Odds API)
+    tz_aware_date = "2024-08-20T15:00:00Z"
+    w_tz = get_adaptive_market_weight(tz_aware_date)
+    assert np.isclose(w_tz, w_early)
 
 def test_concurrent_kelly_dampener():
     """Simultaneous kickoff scaling reduces stake by 1 / sqrt(K)."""
@@ -209,5 +215,68 @@ def test_evaluate_bet_outcome_dnb_and_teams():
     # 1X2 Home Win
     assert evaluate_bet_outcome("Arsenal Win", "H2H", 2, 1, 'H', home_team="Arsenal", away_team="Chelsea") == 'WON'
     assert evaluate_bet_outcome("Chelsea Win", "H2H", 2, 1, 'H', home_team="Arsenal", away_team="Chelsea") == 'LOST'
+
+def test_prediction_log_schema_alignment(tmp_path, monkeypatch):
+    """Verify log_prediction outputs identical 15 columns for automated and manual predictions."""
+    import utils
+    from utils import log_prediction
+    
+    test_log = tmp_path / "test_prediction_log.csv"
+    monkeypatch.setattr(utils, "LOG_FILE", str(test_log))
+    
+    # Automated scanner log
+    log_prediction(
+        home="Arsenal", away="Chelsea", market="1X2", selection="Arsenal Win",
+        model_prob=0.55, market_odds=2.10, edge=0.05, bookie="Betfair",
+        stake=10.0, kickoff="2026-10-10T14:00:00Z"
+    )
+    
+    # Manual prediction log
+    log_prediction(
+        home="Bournemouth", away="Liverpool", market="DNB", selection="Bournemouth DNB",
+        model_prob=0.48, market_odds=2.30, edge=0.04, bookie="Manual",
+        stake=6.50, kickoff="2026-09-20"
+    )
+    
+    df = pd.read_csv(str(test_log))
+    expected_cols = [
+        'Timestamp', 'Kickoff', 'Home', 'Away', 'Market', 'Selection', 
+        'Model_Prob', 'Market_Odds', 'Edge', 'Bookmaker', 'Stake', 'Outcome', 'Closing_Odds', 'CLV', 'PnL'
+    ]
+    assert list(df.columns) == expected_cols
+    assert len(df) == 2
+    assert df.iloc[0]['Home'] == 'Arsenal'
+    assert df.iloc[0]['Market'] == '1X2'
+    assert df.iloc[1]['Home'] == 'Bournemouth'
+    assert df.iloc[1]['Kickoff'] == '2026-09-20'
+    assert df.iloc[1]['Bookmaker'] == 'Manual'
+
+def test_upcoming_matches_remain_pending(tmp_path, monkeypatch):
+    """Verify that matches scheduled in the future or not yet played remain PENDING."""
+    import utils
+    import update_results
+    
+    test_log = tmp_path / "test_pending_log.csv"
+    monkeypatch.setattr(utils, "LOG_FILE", str(test_log))
+    monkeypatch.setattr(update_results, "LOG_FILE", str(test_log))
+    
+    # Log an upcoming fixture
+    utils.log_prediction(
+        home="Bournemouth", away="Liverpool", market="DNB", selection="Bournemouth DNB",
+        model_prob=0.48, market_odds=2.30, edge=0.04, bookie="Manual",
+        stake=6.50, kickoff="2026-10-25"
+    )
+    
+    # Run results update
+    update_results.update()
+    
+    # Verify outcome remains PENDING and was not resolved against past historical matches
+    df = pd.read_csv(str(test_log))
+    assert len(df) == 1
+    assert df.iloc[0]['Outcome'] == 'PENDING'
+    assert df.iloc[0]['PnL'] == 0.0
+    assert df.iloc[0]['CLV'] == 'PENDING'
+
+
 
 

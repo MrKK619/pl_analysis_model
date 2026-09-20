@@ -326,9 +326,9 @@ def main(force_retrain=False):
         best_bookie['A_DNB'] = best_bookie['A']
 
         eval_markets = [
-            ('H2H', 'H', probs['H'], f"{home} Win", fair_1x2[0], True, False),
-            ('H2H', 'D', probs['D'], "Draw", fair_1x2[1], True, False),
-            ('H2H', 'A', probs['A'], f"{away} Win", fair_1x2[2], True, False),
+            ('1X2', 'H', probs['H'], f"{home} Win", fair_1x2[0], True, False),
+            ('1X2', 'D', probs['D'], "Draw", fair_1x2[1], True, False),
+            ('1X2', 'A', probs['A'], f"{away} Win", fair_1x2[2], True, False),
             ('DNB', 'H_DNB', p_h_dnb, f"{home} DNB", fair_h_dnb, False, True),
             ('DNB', 'A_DNB', p_a_dnb, f"{away} DNB", fair_a_dnb, False, True),
         ]
@@ -373,8 +373,8 @@ def main(force_retrain=False):
                 
                 log_prediction(
                     home=home, away=away, market=m_cat, selection=sel_name,
-                    model_prob=model_p, market_odds=odds, edge=edge, bookie=b_name,
-                    stake=stake, kickoff=game.get('commence_time', 'UPCOMING')
+                    model_prob=shrunk_p, market_odds=odds, edge=edge, bookie=b_name,
+                    stake=stake, kickoff=game.get('commence_time')
                 )
                 
         if not match_has_edge:

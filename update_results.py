@@ -113,13 +113,37 @@ def update():
             
             matches = actuals[(actuals['HomeNorm'] == h) & (actuals['AwayNorm'] == a)]
             if not matches.empty:
-                pred_time = pd.to_datetime(row.get('Timestamp', '2000-01-01'))
-                post_matches = matches[matches['Date'] >= pred_time - pd.Timedelta(days=2)]
-                match_row = post_matches.iloc[0] if not post_matches.empty else matches.iloc[-1]
+                kickoff_val = row.get('Kickoff')
+                time_to_parse = kickoff_val if (pd.notna(kickoff_val) and str(kickoff_val).upper() not in ('MANUAL', 'UPCOMING', '')) else row.get('Timestamp', '2000-01-01')
+                pred_time = pd.to_datetime(time_to_parse, errors='coerce')
+                if pd.isna(pred_time):
+                    continue
+                if getattr(pred_time, 'tzinfo', None) is not None:
+                    pred_time = pred_time.tz_localize(None)
+                    
+                pred_date = pred_time.normalize()
+                now_date = pd.Timestamp.now().normalize()
                 
+                # If scheduled kickoff date is in the future, fixture has not been played yet
+                if pred_date > now_date:
+                    continue
+                    
+                # Search for a finished match within a tight calendar window around the scheduled date
+                window_start = pred_date - pd.Timedelta(days=2)
+                window_end = pred_date + pd.Timedelta(days=3)
+                candidate_matches = matches[(matches['Date'] >= window_start) & (matches['Date'] <= window_end)]
+                
+                # If no match exists in this window, do NOT resolve against historical past matches!
+                if candidate_matches.empty:
+                    continue
+                    
+                match_row = candidate_matches.iloc[0]
+                if pd.isna(match_row.get('FTR')) or pd.isna(match_row.get('FTHG')) or pd.isna(match_row.get('FTAG')):
+                    continue
+                    
                 fthg = float(match_row['FTHG'])
                 ftag = float(match_row['FTAG'])
-                ftr = match_row['FTR']
+                ftr = str(match_row['FTR']).strip()
                 
                 market = str(row.get('Market', 'H2H'))
                 selection = str(row.get('Selection', ''))
